@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Bucket
+   uuid = "73B07324-AF21-4D95-97E8-1CD2CA8B00CD"
+   type = "1"
+   version = "2.0">
+   <Breakpoints>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "E637B28D-225B-4217-B1DE-CA8B2EEC3C8E"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "OurPlaces/Controllers/ProfileView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "298"
+            endingLineNumber = "298"
+            landmarkName = "logoutButton"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "43F081A9-81DC-4218-BB5D-34000528E032"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "OurPlaces/Controllers/CaptureMomentView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "246"
+            endingLineNumber = "246"
+            landmarkName = "uploadImgs()"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "43F081A9-81DC-4218-BB5D-34000528E032 - 126f369183253ff7"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(1) suspend resume partial function for closure #1 () async -&gt; () in OurPlaces.CaptureMomentView.uploadImgs() -&gt; ()"
+                  moduleName = "OurPlaces.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/rahul/Desktop/OurPlaces/OurPlaces/Controllers/CaptureMomentView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "246"
+                  endingLineNumber = "246">
+               </Location>
+               <Location
+                  uuid = "43F081A9-81DC-4218-BB5D-34000528E032 - 1890e46a4d73f3f1"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(3) suspend resume partial function for closure #1 () async -&gt; () in OurPlaces.CaptureMomentView.uploadImgs() -&gt; ()"
+                  moduleName = "OurPlaces.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/rahul/Desktop/OurPlaces/OurPlaces/Controllers/CaptureMomentView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "246"
+                  endingLineNumber = "246">
+               </Location>
+               <Location
+                  uuid = "43F081A9-81DC-4218-BB5D-34000528E032 - 13499c337bab7f3"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(5) suspend resume partial function for closure #1 () async -&gt; () in OurPlaces.CaptureMomentView.uploadImgs() -&gt; ()"
+                  moduleName = "OurPlaces.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/rahul/Desktop/OurPlaces/OurPlaces/Controllers/CaptureMomentView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "246"
+                  endingLineNumber = "246">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+   </Breakpoints>
+</Bucket>
