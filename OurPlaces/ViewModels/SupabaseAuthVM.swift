@@ -99,26 +99,118 @@ final class SupabaseAuthVM {
     ) {
 
         Task {
-            do {
-                try await supabase.auth.signOut()
+            // Best-effort server sign-out. We clear local auth state regardless
+            // (see caller), so logout works even when the device is offline.
+            try? await supabase.auth.signOut()
 
-                await MainActor.run {
-                    onSuccess()
-                }
-
-            } catch {
-                await MainActor.run {
-                    onError(error.localizedDescription)
-                }
+            await MainActor.run {
+                onSuccess()
             }
         }
     }
-    func isUserLoggedIn() async -> Bool {
+
+    /// Offline check — reflects the locally-stored session only (no network
+    /// call), so it is safe to call while offline.
+    func isUserLoggedIn() -> Bool {
+        supabase.auth.currentUser != nil
+    }
+
+    // MARK: - PASSWORD RESET (OTP)
+
+    /// Sends a 6-digit recovery code to the given email.
+    func sendPasswordResetCode(email: String) async throws {
+        let normalized = Validators.normalizeEmail(email)
+        print("🔐 [Reset] Sending reset code to \(normalized)")
         do {
-            let session = try await supabase.auth.session
-            return session != nil
+            try await supabase.auth.resetPasswordForEmail(normalized)
+            print("🔐 [Reset] Reset code sent ✅")
         } catch {
-            return false
+            print("🔐 [Reset] Send failed ❌: \(error)")
+            throw error
+        }
+    }
+
+    /// Verifies the recovery code. On success the user has a valid session,
+    /// which lets us update the password immediately.
+    func verifyPasswordResetCode(email: String, code: String) async throws {
+        let normalized = Validators.normalizeEmail(email)
+        let token = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("🔐 [Reset] Verifying code \(token) for \(normalized)")
+        do {
+            try await supabase.auth.verifyOTP(email: normalized, token: token, type: .recovery)
+            print("🔐 [Reset] Code verified, session established ✅ (user: \(supabase.auth.currentUser?.email ?? "nil"))")
+        } catch {
+            print("🔐 [Reset] Verify failed ❌: \(error)")
+            throw error
+        }
+    }
+
+    /// Updates the currently signed-in (recovery) user's password.
+    func updatePassword(newPassword: String) async throws {
+        print("🔐 [Reset] Updating password…")
+        do {
+            _ = try await supabase.auth.update(user: UserAttributes(password: newPassword))
+            print("🔐 [Reset] Password updated ✅")
+        } catch {
+            print("🔐 [Reset] Password update failed ❌: \(error)")
+            throw error
+        }
+    }
+
+    /// Permanently deletes the current user's account and all their data.
+    /// The actual deletion runs in the `delete-account` Edge Function (service
+    /// role) — the client can't delete an auth user directly. The user's JWT is
+    /// sent automatically so the function only deletes the caller's own account.
+    func deleteAccount() async throws {
+        print("🔐 [Account] Requesting account deletion…")
+        do {
+            try await supabase.functions.invoke("delete-account")
+            // The account is gone — clear the now-invalid local session too.
+            try? await supabase.auth.signOut()
+            print("🔐 [Account] Account deleted ✅")
+        } catch {
+            print("🔐 [Account] Deletion failed ❌: \(error)")
+            throw error
+        }
+    }
+
+    /// After a social sign-in, fill the profile's name/avatar from the provider —
+    /// but only fields the user hasn't set yet, so we never overwrite an edit.
+    func backfillProfileIfNeeded(fullName: String?, avatarURL: String?) async {
+        guard let userId = supabase.auth.currentUser?.id else { return }
+        do {
+            let rows: [users] = try await supabase
+                .from("users")
+                .select("*")
+                .eq("id", value: userId)
+                .limit(1)
+                .execute()
+                .value
+            let existing = rows.first
+
+            var updates: [String: String] = [:]
+            if (existing?.full_name ?? "").isEmpty,
+               let fullName, !fullName.isEmpty {
+                updates["full_name"] = fullName
+            }
+            if (existing?.avatar_url ?? "").isEmpty,
+               let avatarURL, !avatarURL.isEmpty {
+                updates["avatar_url"] = avatarURL
+            }
+
+            guard !updates.isEmpty else {
+                print("🔐 [Social] Profile already set — no backfill needed")
+                return
+            }
+
+            try await supabase
+                .from("users")
+                .update(updates)
+                .eq("id", value: userId)
+                .execute()
+            print("🔐 [Social] Backfilled profile: \(updates.keys.joined(separator: ", "))")
+        } catch {
+            print("🔐 [Social] Profile backfill failed: \(error)")
         }
     }
     func fetchUser() async throws -> users {

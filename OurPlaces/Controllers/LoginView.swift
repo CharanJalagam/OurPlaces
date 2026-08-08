@@ -21,6 +21,7 @@ struct LoginView: View {
     @State private var showPopup = false
     @State private var showToast = false
     @State private var isSignUpSuccess: Bool? = false
+    @State private var showForgotPassword = false
 
     var authVM = SupabaseAuthVM()
     
@@ -62,7 +63,17 @@ struct LoginView: View {
                         ).onChange(of: email) { oldValue, newValue in
                             validateFields()
                         }
-                        
+
+                        // Inline email hint
+                        if !email.isEmpty && !Validators.isValidEmail(email) {
+                            HStack {
+                                Text("Enter a valid email address")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color(.error))
+                                Spacer()
+                            }
+                        }
+
                         // Password Field
                         inputField(
                             placeholder: "Password",
@@ -74,9 +85,13 @@ struct LoginView: View {
                         }
                         HStack {
                             Spacer()
-                            Text("Forgot password?")
-                                .font(.system(size: 14))
-                                .foregroundColor(Color(.accent))
+                            Button {
+                                showForgotPassword = true
+                            } label: {
+                                Text("Forgot password?")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Color(.accent))
+                            }
                         }
                     }
                     .padding(.top, 10)
@@ -85,10 +100,10 @@ struct LoginView: View {
                     Button {
                         if isValid{
                             isLoading = true
-                            authVM.login(email: email, password: password, onLoading: { isLoading = $0 }, onSuccess: {
+                            authVM.login(email: Validators.normalizeEmail(email), password: password, onLoading: { isLoading = $0 }, onSuccess: {
+                                // AppAuthState.signIn() persists the flag and
+                                // refreshes the widget.
                                 onLoginSuccess()
-                                WidgetDataManager.shared.setLoginState(true)
-                                WidgetCenter.shared.reloadAllTimelines()
                             }, onError: {
                                 errorMessage = $0
                                 showPopup = true
@@ -125,13 +140,17 @@ struct LoginView: View {
                     socialButton(
                         title: "Sign in with Google",
                         icon: "g.circle"
-                    )
+                    ) {
+                        handleGoogleSignIn()
+                    }
                     
                     //                 Apple Sign In
                     socialButton(
                         title: "Sign in with Apple",
                         icon: "applelogo"
-                    )
+                    ) {
+                        handleAppleSignIn()
+                    }
                     
                     Spacer()
                     
@@ -189,6 +208,14 @@ struct LoginView: View {
             .animation(.easeInOut, value: showToast)
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .navigationBar)
+            .fullScreenCover(isPresented: $showForgotPassword) {
+                ForgotPasswordView(initialEmail: email) {
+                    // Recovery verified + password updated → user has a valid
+                    // session, so log them straight into the app.
+                    showForgotPassword = false
+                    onLoginSuccess()
+                }
+            }
         }
         .onChange(of: isSignUpSuccess, { oldValue, newValue in
             if newValue == true {
@@ -202,8 +229,38 @@ struct LoginView: View {
         })
     }
     private func validateFields() {
-        isValid = !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                  !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Email must be a valid format; password just needs to be non-empty
+        // (we don't enforce complexity rules on login).
+        isValid = Validators.isValidEmail(email) && !password.isEmpty
+    }
+
+    private func handleGoogleSignIn() {
+        isLoading = true
+        Task {
+            do {
+                let signedIn = try await GoogleAuthManager.signIn()
+                // AppAuthState.signIn() persists the flag + refreshes the widget.
+                if signedIn { onLoginSuccess() }
+            } catch {
+                errorMessage = error.localizedDescription
+                showPopup = true
+            }
+            isLoading = false
+        }
+    }
+
+    private func handleAppleSignIn() {
+        isLoading = true
+        Task {
+            do {
+                let signedIn = try await AppleAuthManager.shared.signIn()
+                if signedIn { onLoginSuccess() }
+            } catch {
+                errorMessage = error.localizedDescription
+                showPopup = true
+            }
+            isLoading = false
+        }
     }
 
 }
@@ -238,12 +295,11 @@ private func inputField(
 }
 private func socialButton(
     title: String,
-    icon: String
+    icon: String,
+    action: @escaping () -> Void = {}
 ) -> some View {
-    
-    Button {
-        // OAuth action later
-    } label: {
+
+    Button(action: action) {
         HStack(spacing: 10) {
             Image(systemName: icon)
             Text(title)

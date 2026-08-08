@@ -12,6 +12,7 @@ import SwiftUI
 struct SignupView: View {
     
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var authState: AppAuthState
 
     @State private var name = ""
     @State private var email = ""
@@ -30,24 +31,9 @@ struct SignupView: View {
         ZStack {
             Color(.background)
                 .ignoresSafeArea()
-//            ScrollView(showsIndicators: false){
-//                HStack{
-//                    Button {
-//                        dismiss()
-//                    } label: {
-//                        Image(systemName: "chevron.left")
-//                            .foregroundStyle(.accent)
-//                            .font(.system(size: 20, weight: .semibold))
-//                    }
-//
-//                    
-//                    Spacer()
-//                }
-//                .padding(.horizontal, 24)
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 18) {
-                    
-                    Spacer()
-                    
+
                     // Logo
                     Image(.icon)
                         .resizable()
@@ -82,8 +68,10 @@ struct SignupView: View {
                         ) .onChange(of: email) { oldValue, newValue in
                             validateFields()
                         }
-                        
-                        
+                        if !email.isEmpty && !Validators.isValidEmail(email) {
+                            fieldHint("Enter a valid email address")
+                        }
+
                         inputField(
                             placeholder: "Password",
                             text: $password,
@@ -92,8 +80,10 @@ struct SignupView: View {
                         ) .onChange(of: password) { oldValue, newValue in
                             validateFields()
                         }
-                        
-                        
+                        if !password.isEmpty && !Validators.isValidPassword(password) {
+                            fieldHint("At least \(Validators.minPasswordLength) characters")
+                        }
+
                         inputField(
                             placeholder: "Confirm Password",
                             text: $confirmPassword,
@@ -102,7 +92,10 @@ struct SignupView: View {
                         ) .onChange(of: confirmPassword) { oldValue, newValue in
                             validateFields()
                         }
-                        
+                        if !confirmPassword.isEmpty && confirmPassword != password {
+                            fieldHint("Passwords don't match")
+                        }
+
                     }
                     .padding(.top, 8)
                     
@@ -111,9 +104,9 @@ struct SignupView: View {
                         if isValid{
                             isLoading = true
                             authVM.signUp(
-                                email: email,
+                                email: Validators.normalizeEmail(email),
                                 password: password,
-                                userName: name,
+                                userName: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                 onLoading: { isLoading = $0 },
                                 onSuccess: {
                                     showToast = true
@@ -154,12 +147,16 @@ struct SignupView: View {
                     socialButton(
                         title: "Sign up with Google",
                         icon: "g.circle"
-                    )
-                    
+                    ) {
+                        handleGoogleSignIn()
+                    }
+
                     socialButton(
                         title: "Sign up with Apple",
                         icon: "applelogo"
-                    )
+                    ) {
+                        handleAppleSignIn()
+                    }
                     
 //                    Spacer()
                     
@@ -182,8 +179,24 @@ struct SignupView: View {
                    
                 }
                 .padding(.horizontal, 24)
+                .padding(.vertical, 32)
                 .disabled(isLoading)
-                if isLoading {
+            }
+
+            // Liquid Glass back button (floats over the scrolling content)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color(.textPrimary))
+                    .frame(width: 44, height: 44)
+            }
+            .glassEffect(.regular.interactive(), in: Circle())
+            .padding(.leading, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            if isLoading {
                        Color.black.opacity(0.25)
                            .ignoresSafeArea()
 
@@ -224,11 +237,48 @@ struct SignupView: View {
     }
     private func validateFields() {
         isValid =
-            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !confirmPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            name.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 &&
+            Validators.isValidEmail(email) &&
+            Validators.isValidPassword(password) &&
             password == confirmPassword
+    }
+
+    private func fieldHint(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(Color(.error))
+            Spacer()
+        }
+    }
+
+    private func handleGoogleSignIn() {
+        isLoading = true
+        Task {
+            do {
+                let signedIn = try await GoogleAuthManager.signIn()
+                // Google sign-in already created a valid session — log in directly.
+                if signedIn { authState.signIn() }
+            } catch {
+                errorMessage = error.localizedDescription
+                showPopup = true
+            }
+            isLoading = false
+        }
+    }
+
+    private func handleAppleSignIn() {
+        isLoading = true
+        Task {
+            do {
+                let signedIn = try await AppleAuthManager.shared.signIn()
+                if signedIn { authState.signIn() }
+            } catch {
+                errorMessage = error.localizedDescription
+                showPopup = true
+            }
+            isLoading = false
+        }
     }
 
 }
@@ -264,10 +314,11 @@ private func inputField(
 
 private func socialButton(
     title: String,
-    icon: String
+    icon: String,
+    action: @escaping () -> Void = {}
 ) -> some View {
 
-    Button(action: {}) {
+    Button(action: action) {
         HStack(spacing: 10) {
             Image(systemName: icon)
             Text(title)

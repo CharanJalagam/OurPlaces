@@ -55,7 +55,7 @@ final class PlaceSuggestionService {
     }
     
     private func fetchPlaces() async throws -> [Place] {
-        if  await supabase.isUserLoggedIn(){
+        if supabase.isUserLoggedIn(){
             let places = CoreDataLayer.shared.fetchPlaces()
             if !places.isEmpty{
                 return places

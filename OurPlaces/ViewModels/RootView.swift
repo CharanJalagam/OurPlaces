@@ -12,8 +12,7 @@ struct RootView: View {
     
     @State private var showSplash = true
     @StateObject private var authState = AppAuthState()
-    let authVM = SupabaseAuthVM()
-    
+
     var body: some View {
         Group {
             if showSplash {
@@ -23,15 +22,12 @@ struct RootView: View {
                     OurPlacesTabView()
                 } else {
                     LoginView {
-                        authState.isLoggedIn = true
+                        authState.signIn()
                     }
                 }
             }
         }
         .environmentObject(authState)
-        .task {
-            authState.isLoggedIn = await authVM.isUserLoggedIn()
-        }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
                 withAnimation {

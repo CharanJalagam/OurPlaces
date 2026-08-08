@@ -17,7 +17,7 @@ struct SplashView: View {
 
     var body: some View {
         ZStack {
-            Color(showSolidBackground ? .appRed : .background)
+            Color(.background)
                 .ignoresSafeArea()
 
             VStack(spacing: 12) {
@@ -27,18 +27,15 @@ struct SplashView: View {
                         .scaledToFit()
                         .opacity(showSolidBackground ? 0 : 1)
                         .frame(width: 96, height: 96)
-                    
+
                     Image(.iconPointer)
                         .resizable()
                         .scaledToFit()
                         .frame(width: 40, height: 50)
-                        .scaleEffect(expand ? 55 : 1)
-                        .offset(y: expand ? -500 : (moveup ? 0 : -10))
+                        // Pin no longer zooms — it just gently lifts, then the
+                        // color fill takes over on top of it.
+                        .offset(y: moveup ? 0 : -10)
                         .opacity(showSolidBackground ? 0 : 1)
-//                        .blur(radius: expand ? 8 : 0)
-                        .opacity(expand ? 1.5 : 1)
-
-                       
 
                 }
 
@@ -54,9 +51,20 @@ struct SplashView: View {
                     .foregroundColor(Color(.textSecondary))
                     .opacity(showSolidBackground ? 0 : 1)
                     .opacity(animate ? 1 : 0)
-                
+
             }
-            .padding(.top, -40) 
+            .padding(.top, -40)
+
+            // MARK: Radial color takeover
+            // An appRed circle grows from the pin's position until it fills
+            // the screen, then RootView cross-fades to the login view.
+            Circle()
+                .fill(Color(.appRed))
+                .frame(width: 120, height: 120)
+                .scaleEffect(expand ? 45 : 0.001)
+                .offset(y: -70)   // anchored roughly on the pin
+                .opacity(expand ? 1 : 0)
+                .ignoresSafeArea()
         }
         .onAppear {
 

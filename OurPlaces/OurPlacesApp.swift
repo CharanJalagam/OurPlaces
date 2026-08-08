@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import GoogleSignIn
 
 @main
 struct OurPlacesApp: App {
@@ -14,11 +15,15 @@ struct OurPlacesApp: App {
         OurPlacesShortcuts.updateAppShortcutParameters()
         ImageCache.shared.clearExpired(olderThan: 30)
     }
-    
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .onOpenURL { url in
+                    // Let GoogleSignIn complete its OAuth callback.
+                    GIDSignIn.sharedInstance.handle(url)
+                }
         }
     }
 }

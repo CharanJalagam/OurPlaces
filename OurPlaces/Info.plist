@@ -2,9 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSFaceIDUsageDescription</key>
+	<string>OurPlaces uses Face ID to confirm it's you before deleting your account.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>IntentIntent</string>
+	</array>
+	<key>GIDClientID</key>
+	<string>1067972273726-tsfa56p6hr7fu6ohq1l5bf3e78n5r2c4.apps.googleusercontent.com</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.1067972273726-tsfa56p6hr7fu6ohq1l5bf3e78n5r2c4</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

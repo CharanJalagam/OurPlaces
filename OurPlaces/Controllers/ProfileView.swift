@@ -27,6 +27,8 @@ struct ProfileView: View {
     @State private var originalImageData: Data?
     
     @State private var userObj: users?
+    @State private var showDeleteConfirm = false
+    @State private var deleteError: String?
     let authVm = SupabaseAuthVM()
     
     var body: some View {
@@ -46,6 +48,7 @@ struct ProfileView: View {
                         accountSection
                         
                         logoutButton
+                        deleteAccountButton
                         appVersion
                     }
                     .padding(.top, 24)
@@ -87,6 +90,23 @@ struct ProfileView: View {
                     print(error)
                 }
             }
+        }
+        .alert("Delete Account?", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) { performDeleteAccount() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes your account and all your places, visits, and photos. This can't be undone.")
+        }
+        .alert(
+            "Couldn't delete account",
+            isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
         }
     }
 }
@@ -292,13 +312,13 @@ private extension ProfileView {
         Button(role: .destructive) {
             Task {
                 await authVm.logout {
-                    authState.isLoggedIn = false
+                    // AppAuthState.signOut() persists the flag and refreshes
+                    // the widget.
+                    authState.signOut()
                     CoreDataLayer.shared.deleteAllPlaces()
                     ImageCache.shared.clearAll()
-                    WidgetDataManager.shared.setLoginState(false)
-                    WidgetCenter.shared.reloadAllTimelines()
                 } onError: { _ in
-                    
+
                 }
             }
 
@@ -312,6 +332,44 @@ private extension ProfileView {
         .padding(.horizontal, 24)
     }
     
+    var deleteAccountButton: some View {
+        Button(role: .destructive) {
+            showDeleteConfirm = true
+        } label: {
+            Text("Delete Account")
+                .foregroundColor(.red)
+                .frame(maxWidth: .infinity)
+                .padding()
+        }
+        .background(Color(.white))
+        .cornerRadius(12)
+        .padding(.horizontal, 24)
+    }
+
+    func performDeleteAccount() {
+        Task {
+            // Face ID / passcode gate before the destructive action.
+            let confirmed = await BiometricAuth.confirm(
+                reason: "Confirm it's you to delete your account"
+            )
+            guard confirmed else { return }
+
+            await MainActor.run { showLoader = true }
+            do {
+                try await authVm.deleteAccount()
+                await MainActor.run {
+                    // Account is gone — clear local state and route to login.
+                    authState.signOut()
+                    CoreDataLayer.shared.deleteAllPlaces()
+                    ImageCache.shared.clearAll()
+                }
+            } catch {
+                await MainActor.run { deleteError = error.localizedDescription }
+            }
+            await MainActor.run { showLoader = false }
+        }
+    }
+
     var appVersion: some View {
         Text("App Version 1.0.2")
             .foregroundColor(.gray)

@@ -35,9 +35,22 @@ final class SupabaseManager {
         self.supabaseURL = url
         self.supabaseAnonKey = anonKey
 
+        #if DEBUG
+        // Log every Supabase request/response app-wide. DEBUG only — request
+        // bodies can contain passwords/tokens, so this never ships in release.
+        let options = SupabaseClientOptions(
+            global: .init(logger: SupabaseNetworkLogger())
+        )
+        self.client = SupabaseClient(
+            supabaseURL: supabaseURL,
+            supabaseKey: supabaseAnonKey,
+            options: options
+        )
+        #else
         self.client = SupabaseClient(
             supabaseURL: supabaseURL,
             supabaseKey: supabaseAnonKey
         )
+        #endif
     }
 }
