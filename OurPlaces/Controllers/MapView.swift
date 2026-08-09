@@ -10,16 +10,11 @@ import MapKit
 
 struct MapView: View {
     
-    let allCategories: [PlaceCategory] = [
-        PlaceCategory( title: "All",icon: "square.grid.2x2.fill"),
-        PlaceCategory(title: "Cafe",icon: "cup.and.saucer.fill",),
-        PlaceCategory(title: "Food",icon: "fork.knife",),
-        PlaceCategory(title: "Historic",icon: "building.columns.fill",),
-        PlaceCategory(title: "Nature",icon: "leaf.fill",),
-        PlaceCategory(title: "Shopping",icon: "bag.fill",),
-        PlaceCategory(title: "Religious",icon: "sparkles",),
-        PlaceCategory(title: "Entertainment",icon: "theatermasks.fill",)
-    ]
+    @ObservedObject private var categoryStore = CategoryStore.shared
+    var allCategories: [PlaceCategory] {
+        [PlaceCategory(title: "All", icon: "square.grid.2x2.fill")]
+        + categoryStore.all.map { PlaceCategory(title: $0, icon: CategoryStore.icon(for: $0)) }
+    }
     @StateObject private var locationManager = LocationManager()
     @State private var selectedCategory: PlaceCategory = PlaceCategory(title: "All", icon: "square.grid.2x2.fill")
     @State private var selectedPlaceForDetails: Place?
@@ -134,8 +129,10 @@ struct MapView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var placingAddress: String = ""
     @State private var placingName: String = ""
+    @State private var placingCategory: String?
     @State private var visitedThumbnails: [UUID: String] = [:]
     @State private var clusters: [PlaceCluster] = []
+    @State private var editingPlace: Place?
     @AppStorage("userIndicatorEmoji") private var selectedEmoji: String = "🧍🏼‍♂️"
     private let emojiOptions = ["🧍🏼‍♂️", "🧍🏼‍♀️", "🚶‍♂️", "🏃‍♂️", "👫🏼", "🦖", "🚗", "🐥"]
 
@@ -335,13 +332,13 @@ struct MapView: View {
                 
                 // BOTTOM CARD
                 if let place = selectedPlace, showCard {
-                    
-                    PlaceCardView(place: place) {
-                        dismissBottomCard()
-                    }
-                    .onTapGesture {
-                        navigateToDetails(place)
-                    }
+
+                    PlaceCardView(
+                        place: place,
+                        onClose: { dismissBottomCard() },
+                        onAddVisit: { navigateToDetails(place) },
+                        onEdit: { editingPlace = place }
+                    )
                     .transition(.move(edge: .bottom))
                     .zIndex(1)
                 }
@@ -440,7 +437,8 @@ struct MapView: View {
                         latitude: 37.7749,
                         longitude: -122.4194
                     ),
-                    suggestedName: placingName
+                    suggestedName: placingName,
+                    suggestedCategory: placingCategory
                 ){
                     Task {
                                 await refreshPlaces()
@@ -449,6 +447,9 @@ struct MapView: View {
                 .toolbar(.hidden, for: .tabBar)
                 .onDisappear {
                     isInAddFlow = false   // ← restore when popped back
+                    // Reset search so the map returns to its default state.
+                    searchText = ""
+                    searchResults = []
                 }
             }
         }
@@ -464,6 +465,9 @@ struct MapView: View {
 
             Task {
                 await refreshPlaces()
+            }
+            Task {
+                await categoryStore.refresh()   // sync custom categories → top chips
             }
         }
         .task {
@@ -481,6 +485,12 @@ struct MapView: View {
         }
         .onChange(of: filteredPlaces) { _, _ in
             recomputeClusters()
+        }
+        .sheet(item: $editingPlace) { placeToEdit in
+            EditPlaceView(place: placeToEdit) {
+                dismissBottomCard()
+                Task { await refreshPlaces() }
+            }
         }
         .onChange(of: locationManager.userLocation) { _, location in
             guard let location, isFirtTime else { return }
@@ -611,20 +621,14 @@ struct MapView: View {
 
     private func goToSearchResult(_ item: MKMapItem) {
         let coordinate = item.placemark.coordinate
-
-        // Recenter so the spot is in view when we return from the add flow.
-        cameraPosition = .camera(
-            MapCamera(centerCoordinate: coordinate, distance: 4_000)
-        )
-
-        // Prefill and open Add Place for this searched place — one-tap save.
-        newPlaceCoordinate = coordinate
-        placingName = item.name ?? ""
+        withAnimation(.easeInOut) {
+            cameraPosition = .camera(
+                MapCamera(centerCoordinate: coordinate, distance: 4_000)
+            )
+        }
         searchResults = []
-        searchText = ""
+        searchText = item.name ?? searchText
         hideKeyboard()
-        isInAddFlow = true
-        navigateToAddPlace = true
     }
 
     /// Reverse-geocode the pin being placed so the user sees the address.
@@ -640,6 +644,41 @@ struct MapView: View {
                 placingName = name
                 placingAddress = address
             }
+        }
+
+        // Smart category: infer from the nearest Apple Maps POI at this point.
+        Task {
+            let category = await suggestCategory(for: coordinate)
+            await MainActor.run { placingCategory = category }
+        }
+    }
+
+    /// Finds the nearest point-of-interest and maps its Apple category to ours.
+    private func suggestCategory(for coordinate: CLLocationCoordinate2D) async -> String? {
+        let request = MKLocalPointsOfInterestRequest(center: coordinate, radius: 60)
+        guard
+            let response = try? await MKLocalSearch(request: request).start(),
+            let poi = response.mapItems.first?.pointOfInterestCategory
+        else { return nil }
+        return mapPOICategory(poi)
+    }
+
+    private func mapPOICategory(_ poi: MKPointOfInterestCategory) -> String? {
+        switch poi {
+        case .cafe, .bakery:
+            return "Cafe"
+        case .restaurant, .foodMarket, .brewery, .winery, .distillery, .nightlife:
+            return "Food"
+        case .museum, .castle, .fortress, .landmark, .nationalMonument, .library:
+            return "Historic"
+        case .park, .nationalPark, .beach, .campground, .marina:
+            return "Nature"
+        case .store:
+            return "Shopping"
+        case .movieTheater, .theater, .amusementPark, .stadium, .musicVenue, .planetarium, .aquarium, .zoo:
+            return "Entertainment"
+        default:
+            return nil
         }
     }
 

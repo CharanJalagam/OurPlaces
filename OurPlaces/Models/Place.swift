@@ -27,7 +27,7 @@ struct Place: Identifiable, Decodable, Hashable {
     let created_at: String
 }
 struct PlaceCategory: Identifiable, Equatable {
-    let id = UUID()
+    var id: String { title }
     let title: String
     let icon: String
 }
@@ -52,6 +52,7 @@ struct VisitImageInsert: Encodable {
 struct VisitImage: Decodable, Hashable {
     let image_url: String
     let created_at_millis: Int64
+    var caption: String? = nil
 }
 struct users: Codable{
     let id: UUID

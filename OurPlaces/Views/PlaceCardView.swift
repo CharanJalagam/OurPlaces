@@ -2,282 +2,208 @@
 //  PlaceCardView.swift
 //  OurPlaces
 //
-//  Created by apple on 10/01/26.
+//  Bottom sheet shown when a map pin is tapped: the place's photos + info,
+//  its visit memories (if any), and a clear "Add a Visit" action.
 //
 
 import SwiftUI
 import MapKit
 
 struct PlaceCardView: View {
-    
+
     let place: Place
-    let onClose: () -> Void
-    let authVM  = SupabaseAuthVM()
-    @State private var isVisited: Bool = true
-    @State private var showLoader: Bool = false
-    @State private var images: [VisitImage] = []
+    var onClose: () -> Void
+    var onAddVisit: () -> Void
+    var onEdit: () -> Void
+
+    private let authVM = SupabaseAuthVM()
+    @State private var isVisited = false
+    @State private var memories: [VisitImage] = []
+
+    private var placePhotos: [String] { place.image_urls ?? [] }
+    private var trimmedDescription: String {
+        (place.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
-        ZStack{
-            
-                VStack(spacing: 16) {
-                    
-                    // Drag Indicator
-                    Capsule()
-                        .frame(width: 40, height: 5)
-                        .foregroundColor(.gray.opacity(0.4))
-                        .padding(.top, 8)
-                    
-                    
-                    if isVisited && !images.isEmpty {
-                        MemoriesSectionView(photos: images, place: place)
-                            .transition(
-                                .move(edge: .top)
-                                .combined(with: .opacity)
-                            )
-                    }
-                    if isVisited && !images.isEmpty {
-                        Capsule()
-                            .frame(height: 0.5)
-                            .foregroundColor(.gray.opacity(0.4))
-                            .padding(.top, 8)
-                    }
-                    
-                    // PLACE DETAILS
-                    HStack {
-                        
-                        VStack(alignment: .leading, spacing: 6) {
-                            if isVisited{
-                                HStack(spacing: 6) {
-                                    Text("VISITED")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.orange)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(Color.orange.opacity(0.15))
-                                )
-                            }
-                            Text(place.name)
-                                .font(.headline)
-                            
-                            //                    Text("\(place.category) • \(place.distance)")
-                            Text("\(place.category)")
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                            
-                            HStack {
-                                Image(systemName: "star.fill")
-                                    .foregroundColor(.orange)
-                                Text("\(place.rating ?? 0, specifier: "%.1f")")
-                                Text("(\(place.rating_count) reviews)")
-                                    .foregroundColor(.gray)
-                                    .font(.caption)
-                            }
-                            
-                        }
-                        
-                        Spacer()
-                        
-                        //                RoundedRectangle(cornerRadius: 12)
-                        //                    .fill(Color.gray.opacity(0.3))
-                        //                    .frame(width: 64, height: 64)
-                        TabView {
-                            ForEach(place.image_urls ?? [], id: \.self) { urlString in
-                                CachedAsyncImage(url: URL(string: urlString)) { phase in
-                                    switch phase {
-                                        
-                                    case .empty:
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color.gray.opacity(0.3))
-                                            ProgressView()
-                                        }
-                                        
-                                    case .success(let image):
-                                        image
-                                            .resizable()
-                                            .scaledToFill()
-                                        
-                                    case .failure:
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color.gray.opacity(0.3))
-                                            Image(systemName: "photo.fill")
-                                                .foregroundStyle(.gray)
-                                        }
-                                        
-                                    @unknown default:
-                                        EmptyView()
-                                    }
-                                }
-                                .frame(width: 84, height: 84)
-                                .clipped()
-                                .cornerRadius(12)
-                            }
-                        }
-                        .tabViewStyle(.page)
-                        .frame(width: 84, height: 84)
-                        
-                        
-                    }
-                    
-                    // ACTION BUTTONS
-                    HStack(spacing: 14) {
-                        Button {
-                            openAppleMapsDirections(
-                                toLatitude: place.latitude,
-                                longitude: place.longitude,
-                                placeName: place.name
-                            )
-                        } label: {
-                            Label("Directions", systemImage: "location.fill")
-                                .frame(maxWidth: .infinity, maxHeight: 34)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        if place.phone_number ?? "" != "" {
-                            Button {
-                                if let phone = place.phone_number {
-                                    callPhoneNumber(phone)
-                                }
-                            } label: {
-                                Image(systemName: "phone.fill")
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.gray.opacity(0.15))
-                                    .clipShape(Circle())
-                            }
-                        }
-                        if place.email ?? "" != ""{
-                            Button {
-                                if let email = place.email {
-                                    openMail(
-                                        to: email,
-                                        subject: "Enquiry about \(place.name)",
-                                        body: "Hello,\n\nI would like to know more about \(place.name).\n"
-                                    )
-                                }
-                            } label: {
-                                Image(systemName: "mail.fill")
-                                    .frame(width: 44, height: 44)
-                                    .background(Color.gray.opacity(0.15))
-                                    .clipShape(Circle())
-                            }
-                        }
-                        
-                    }
-                    
-//                    if showLoader {
-//                        ProgressView()
-//                            .scaleEffect(1.2)
-//                    }
-                }
-                .padding()
-                .background(Color.white)
-                .cornerRadius(24)
-                .shadow(radius: 10)
-                .padding()
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                
+        VStack {
+            Spacer()
+            card
         }
-        .task(id: place.id) {
-            showLoader = true
-            
-            do {
-                let visited = try await authVM.isPlaceVisited(placeId: place.id)
-                
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isVisited = visited
+        .task(id: place.id) { await load() }
+    }
+
+    // MARK: - Card
+
+    private var card: some View {
+        VStack(spacing: 16) {
+            handle
+            hero
+
+            if !trimmedDescription.isEmpty {
+                Text(trimmedDescription)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(4)
+            }
+
+            if isVisited && !memories.isEmpty {
+                Divider()
+                MemoriesSectionView(photos: memories, place: place)
+            }
+
+            actionButtons
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        .padding()
+    }
+
+    private var handle: some View {
+        ZStack {
+            Capsule()
+                .fill(Color.gray.opacity(0.3))
+                .frame(width: 40, height: 5)
+            HStack {
+                Button(action: onEdit) {
+                    Label("Edit", systemImage: "square.and.pencil")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color(.appRed))
                 }
-                
-                showLoader = false
-                if isVisited{
-                    do {
-                        images = try await authVM.fetchImagesForPlace(placeId: place.id)
-                    } catch {
-                        print("Failed to fetch images:", error)
-                    }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.gray.opacity(0.55))
                 }
-            } catch {
-                showLoader = false
-                print("Failed to check visit status:", error)
             }
         }
     }
-    
-    func callPhoneNumber(_ number: String) {
-        let cleanNumber = number
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-        
-        if let url = URL(string: "tel://\(cleanNumber)"),
-           UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
+
+    // MARK: - Hero (place photos + title)
+
+    private var hero: some View {
+        ZStack(alignment: .bottomLeading) {
+            if placePhotos.isEmpty {
+                ZStack {
+                    LinearGradient(
+                        colors: [Color(.appRed).opacity(0.85), Color(.appRed)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    Image(systemName: CategoryStore.icon(for: place.category))
+                        .font(.system(size: 44))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+            } else {
+                TabView {
+                    ForEach(placePhotos, id: \.self) { urlString in
+                        CachedAsyncImage(url: URL(string: urlString)) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFill()
+                            case .empty:
+                                ZStack { Color.gray.opacity(0.2); ProgressView() }
+                            default:
+                                ZStack {
+                                    Color.gray.opacity(0.2)
+                                    Image(systemName: "photo").foregroundStyle(.gray)
+                                }
+                            }
+                        }
+                        .clipped()
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: placePhotos.count > 1 ? .automatic : .never))
+            }
+
+            // Scrim so the title stays legible over any photo.
+            LinearGradient(colors: [.clear, .black.opacity(0.6)],
+                           startPoint: .center, endPoint: .bottom)
+
+            VStack(alignment: .leading, spacing: 6) {
+                if isVisited { visitedBadge }
+                Text(place.name)
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                HStack(spacing: 6) {
+                    Image(systemName: CategoryStore.icon(for: place.category))
+                    Text(place.category)
+                }
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.9))
+            }
+            .padding(14)
+        }
+        .frame(height: 170)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var visitedBadge: some View {
+        Label("Visited", systemImage: "checkmark.seal.fill")
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color(.appRed), in: Capsule())
+    }
+
+    // MARK: - Actions
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button(action: onAddVisit) {
+                Label(isVisited ? "Add Another Visit" : "Add a Visit",
+                      systemImage: "camera.fill")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity, minHeight: 46)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color(.appRed))
+
+            Button {
+                openAppleMapsDirections(
+                    toLatitude: place.latitude,
+                    longitude: place.longitude,
+                    placeName: place.name
+                )
+            } label: {
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    .frame(width: 46, height: 46)
+            }
+            .buttonStyle(.bordered)
+            .tint(.gray)
         }
     }
-    
-    func openMail(to email: String, subject: String? = nil, body: String? = nil) {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        
-        var queryItems: [URLQueryItem] = []
-        
-        if let subject = subject {
-            queryItems.append(URLQueryItem(name: "subject", value: subject))
+
+    // MARK: - Data
+
+    private func load() async {
+        isVisited = false
+        memories = []
+        do {
+            let visited = try await authVM.isPlaceVisited(placeId: place.id)
+            await MainActor.run {
+                withAnimation(.easeInOut(duration: 0.25)) { isVisited = visited }
+            }
+            if visited {
+                let imgs = (try? await authVM.fetchImagesForPlace(placeId: place.id)) ?? []
+                await MainActor.run { memories = imgs }
+            }
+        } catch {
+            print("PlaceCard load error:", error)
         }
-        
-        if let body = body {
-            queryItems.append(URLQueryItem(name: "body", value: body))
-        }
-        
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
-        
-        guard let url = components.url else { return }
-        
-        UIApplication.shared.open(url)
     }
-    
-    func openAppleMapsDirections(
-        toLatitude lat: Double,
-        longitude lon: Double,
-        placeName: String
-    ) {
-        let destinationCoordinate = CLLocationCoordinate2D(
-            latitude: lat,
-            longitude: lon
-        )
-        
-        let placemark = MKPlacemark(coordinate: destinationCoordinate)
-        let mapItem = MKMapItem(placemark: placemark)
+
+    private func openAppleMapsDirections(toLatitude lat: Double, longitude lon: Double, placeName: String) {
+        let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        let mapItem = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
         mapItem.name = placeName
-        
-        let launchOptions = [
+        mapItem.openInMaps(launchOptions: [
             MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving
-        ]
-        
-        mapItem.openInMaps(launchOptions: launchOptions)
-    }
-
-}
-struct CircleIconButton: View {
-    let icon: String
-    
-    var body: some View {
-        Button {
-        } label: {
-            Image(systemName: icon)
-                .frame(width: 44, height: 44)
-                .background(Color.gray.opacity(0.15))
-                .clipShape(Circle())
-        }
+        ])
     }
 }
-
-//#Preview {
-//    PlaceCardView(place: Place(id: UUID(), name: "Charminar", rating: 234, rating_count: 23, description: nil, category: "food", latitude:1223, longitude: 12323, phone_number: "8977", email: "ahbdkjad", website: "asdjakj", image_urls: [], is_visited: true, created_at: "asd")) {
-//        
-//    }
-//}
-
-

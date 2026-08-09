@@ -355,14 +355,28 @@ final class SupabaseAuthVM {
             .select("""
             image_url,
             created_at_millis,
+            caption,
             visits!inner(place_id)
         """)
             .eq("user_id", value: userId)
             .eq("visits.place_id", value: placeId)
             .order("created_at_millis", ascending: false)
             .execute()
-        
+
         return try JSONDecoder().decode([VisitImage].self, from: response.data)
+    }
+
+    /// Sets/updates the caption on a memory photo (matched by its image URL).
+    func setCaption(imageURL: String, caption: String) async throws {
+        guard let userId = supabase.auth.currentUser?.id else {
+            throw NSError(domain: "Auth", code: 401)
+        }
+        try await supabase
+            .from("visit_images")
+            .update(["caption": caption])
+            .eq("user_id", value: userId)
+            .eq("image_url", value: imageURL)
+            .execute()
     }
     
     func uploadProfilePhoto(
@@ -424,6 +438,65 @@ final class SupabaseAuthVM {
     }
 
     
+    // MARK: - CATEGORIES (per-user custom categories)
+
+    /// The current user's custom categories, oldest first.
+    func fetchCategories() async -> [String] {
+        guard let userId = supabase.auth.currentUser?.id else { return [] }
+        do {
+            let rows: [CategoryRow] = try await supabase
+                .from("categories")
+                .select("name")
+                .eq("user_id", value: userId)
+                .order("created_at", ascending: true)
+                .execute()
+                .value
+            return rows.map { $0.name }
+        } catch {
+            print("Error fetching categories:", error)
+            return []
+        }
+    }
+
+    func addCategory(name: String) async throws {
+        guard let userId = supabase.auth.currentUser?.id else {
+            throw NSError(domain: "Auth", code: 401)
+        }
+        try await supabase
+            .from("categories")
+            .insert(CategoryInsert(user_id: userId, name: name))
+            .execute()
+    }
+
+    func deleteCategory(name: String) async throws {
+        guard let userId = supabase.auth.currentUser?.id else {
+            throw NSError(domain: "Auth", code: 401)
+        }
+        try await supabase
+            .from("categories")
+            .delete()
+            .eq("user_id", value: userId)
+            .eq("name", value: name)
+            .execute()
+    }
+
+    /// How many of the user's places use a given category (for "block if in use").
+    func placeCount(usingCategory category: String) async -> Int {
+        guard let userId = supabase.auth.currentUser?.id else { return 0 }
+        do {
+            let response = try await supabase
+                .from("places")
+                .select("id", count: .exact)
+                .eq("user_id", value: userId)
+                .eq("category", value: category)
+                .execute()
+            return response.count ?? 0
+        } catch {
+            print("Error counting places for category:", error)
+            return 0
+        }
+    }
+
     /// One representative (most recent) image URL per visited place, fetched in
     /// a single query — so map pins don't each make their own network call.
     func fetchVisitedPlaceThumbnails() async -> [UUID: String] {
@@ -501,6 +574,35 @@ final class SupabaseAuthVM {
             .execute()
     }
 
+    /// Updates an existing place the user owns (name / category / description /
+    /// photos). Any `newImages` are uploaded and appended to `keptImageURLs`.
+    func updatePlace(
+        id: UUID,
+        name: String,
+        category: String,
+        description: String,
+        keptImageURLs: [String],
+        newImages: [UIImage]
+    ) async throws {
+        guard let userId = supabase.auth.currentUser?.id else {
+            throw NSError(domain: "Auth", code: 401)
+        }
+        let uploaded = try await uploadPlaceImages(newImages, userId: userId)
+        let imageURLs = keptImageURLs + uploaded
+
+        try await supabase
+            .from("places")
+            .update(PlaceUpdate(
+                name: name,
+                category: category,
+                description: description,
+                image_urls: imageURLs
+            ))
+            .eq("id", value: id)
+            .eq("user_id", value: userId)
+            .execute()
+    }
+
     /// Uploads place photos to storage and returns their public URLs.
     private func uploadPlaceImages(_ images: [UIImage], userId: UUID) async throws -> [String] {
         var urls: [String] = []
@@ -523,6 +625,23 @@ final class SupabaseAuthVM {
         }
         return urls
     }
+}
+
+/// Update payload for editing a place.
+private struct PlaceUpdate: Encodable {
+    let name: String
+    let category: String
+    let description: String
+    let image_urls: [String]
+}
+
+/// Rows for the per-user `categories` table.
+private struct CategoryRow: Decodable {
+    let name: String
+}
+private struct CategoryInsert: Encodable {
+    let user_id: UUID
+    let name: String
 }
 
 /// Decodes a visit_images row joined with its visit's place_id (for batch thumbnails).
