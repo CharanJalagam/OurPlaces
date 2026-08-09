@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import PhotosUI
 
 struct AddPlaceView: View {
     
@@ -9,6 +10,9 @@ struct AddPlaceView: View {
         longitude: -122.4194
     )
     
+    /// Optional name suggested from the picked location's address.
+    var suggestedName: String = ""
+
     @State private var placeName = ""
     @State private var description = ""
     @State private var selectedCategory = "Cafe"
@@ -18,6 +22,8 @@ struct AddPlaceView: View {
     @State private var showSuccessAlert = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedImages: [UIImage] = []
     @Environment(\.dismiss) private var dismiss
     var onPlaceAdded: (() -> Void)?
     
@@ -46,6 +52,9 @@ struct AddPlaceView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Add Place Details")
         .toolbar(.hidden, for: .tabBar)
+        .onAppear {
+            if placeName.isEmpty { placeName = suggestedName }
+        }
         .alert("Place Added 🎉", isPresented: $showSuccessAlert) {
             Button("OK") {
                 dismiss()
@@ -174,14 +183,64 @@ private extension AddPlaceView {
                     .font(.caption)
                     .foregroundColor(.gray)
             }
-            
-            HStack(spacing: 12) {
-                photoUploadBox()
-                photoPlaceholder()
-                photoPlaceholder()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    PhotosPicker(
+                        selection: $selectedItems,
+                        maxSelectionCount: 5,
+                        matching: .images
+                    ) {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6]))
+                            .frame(width: 80, height: 80)
+                            .foregroundColor(.gray)
+                            .overlay(
+                                VStack(spacing: 4) {
+                                    Image(systemName: "plus")
+                                    Text("Add").font(.caption2)
+                                }
+                                .foregroundColor(.gray)
+                            )
+                    }
+
+                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { idx, image in
+                        ZStack(alignment: .topTrailing) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 80, height: 80)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                            Button {
+                                if idx < selectedItems.count {
+                                    selectedItems.remove(at: idx)
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.white, .black.opacity(0.6))
+                                    .padding(4)
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding(.horizontal)
+        .onChange(of: selectedItems) { _, items in
+            Task { await loadImages(items) }
+        }
+    }
+
+    private func loadImages(_ items: [PhotosPickerItem]) async {
+        var images: [UIImage] = []
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let ui = UIImage(data: data) {
+                images.append(ui)
+            }
+        }
+        await MainActor.run { selectedImages = images }
     }
     
     // 💾 Save Button
@@ -218,7 +277,8 @@ private extension AddPlaceView {
                     latitude: coordinate.latitude,
                     longitude: coordinate.longitude,
                     category: selectedCategory,
-                    description: description
+                    description: description,
+                    images: selectedImages
                 )
                 
                 await supabaseVM.fetchPlaces()
@@ -304,22 +364,6 @@ private extension AddPlaceView {
         }
     }
     
-    func photoUploadBox() -> some View {
-        RoundedRectangle(cornerRadius: 14)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6]))
-            .frame(width: 80, height: 80)
-            .overlay(
-                Image(systemName: "plus")
-                    .font(.title2)
-                    .foregroundColor(.gray)
-            )
-    }
-    
-    func photoPlaceholder() -> some View {
-        RoundedRectangle(cornerRadius: 14)
-            .fill(Color.gray.opacity(0.2))
-            .frame(width: 80, height: 80)
-    }
 }
 func hideKeyboard() {
     UIApplication.shared.sendAction(

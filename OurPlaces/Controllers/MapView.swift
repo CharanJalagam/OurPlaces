@@ -130,8 +130,15 @@ struct MapView: View {
 //    }
 
     @State private var searchText: String = ""
+    @State private var searchResults: [MKMapItem] = []
+    @State private var searchTask: Task<Void, Never>?
+    @State private var placingAddress: String = ""
+    @State private var placingName: String = ""
+    @State private var visitedThumbnails: [UUID: String] = [:]
+    @State private var clusters: [PlaceCluster] = []
+    @AppStorage("userIndicatorEmoji") private var selectedEmoji: String = "🧍🏼‍♂️"
+    private let emojiOptions = ["🧍🏼‍♂️", "🧍🏼‍♀️", "🚶‍♂️", "🏃‍♂️", "👫🏼", "🦖", "🚗", "🐥"]
 
-    
     var supabaseVM = SupabaseAuthVM()
     
     @State private var places: [Place] = []
@@ -140,53 +147,47 @@ struct MapView: View {
             ZStack {
                 
                 Map(position: $cameraPosition) {
-                    UserAnnotation()
-                    ForEach(filteredPlaces) { place in
-                        Annotation(place.name, coordinate: CLLocationCoordinate2D(latitude: place.latitude, longitude: place.longitude)) {
-                            Button {
-                                selectedPlace = place
-                                withAnimation(.spring()) { showCard = true }
-                            } label: {
-                                if vistitedPlacesID.contains(place.id){
-//                                    MapPinView(place: place, isVisited: true)
-                                    VisitedMapPinView(place: place)
-                                }else{
-                                    MapPinView(place: place)
+                    ForEach(clusters) { cluster in
+                        Annotation(
+                            cluster.places.count == 1 ? cluster.places[0].name : "",
+                            coordinate: cluster.coordinate,
+                            // Single pins point at the location with their tip;
+                            // cluster bubbles are centered on it.
+                            anchor: cluster.places.count == 1 ? .bottom : .center
+                        ) {
+                            if cluster.places.count == 1 {
+                                let place = cluster.places[0]
+                                Button {
+                                    selectedPlace = place
+                                    withAnimation(.spring()) { showCard = true }
+                                } label: {
+                                    // One unified photo-balloon pin for every place.
+                                    VisitedMapPinView(place: place, imageURL: bestImage(for: place))
+                                }
+                            } else {
+                                Button {
+                                    zoomToCluster(cluster)
+                                } label: {
+                                    clusterBubble(cluster.places.count)
                                 }
                             }
                         }
                     }
-                }
-                .onMapCameraChange { context in
-                    let camera = context.camera
-                    self.currentCamera = camera
-                    
-                    if isAddingPlace {
-                        newPlaceCoordinate = camera.centerCoordinate
-                    }
-                    
-                    guard let userLocation = locationManager.userLocation else { return }
-                    
-                    let mapCenter = CLLocation(
-                        latitude: camera.centerCoordinate.latitude,
-                        longitude: camera.centerCoordinate.longitude
-                    )
-                    
-                    let distanceFromUser = mapCenter.distance(from: userLocation)
-                    let maxPanDistance: Double = maxAltitude
-                    
-                    if distanceFromUser > maxPanDistance || camera.distance > maxAltitude {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                            cameraPosition = .camera(
-                                MapCamera(
-                                    centerCoordinate: userLocation.coordinate,
-                                    distance: min(camera.distance, maxAltitude),
-                                    heading: camera.heading,
-                                    pitch: camera.pitch
-                                )
-                            )
+
+                    // Custom "you are here" marker, drawn last so it stays on top.
+                    if let userLoc = locationManager.userLocation {
+                        Annotation("", coordinate: userLoc.coordinate, anchor: .bottom) {
+                            UserLocationDot(emoji: selectedEmoji)
                         }
                     }
+                }
+                .onMapCameraChange { context in
+                    // Free roaming — no pan/zoom lock, so trips anywhere work.
+                    self.currentCamera = context.camera
+                    if isAddingPlace {
+                        newPlaceCoordinate = context.camera.centerCoordinate
+                    }
+                    recomputeClusters()   // re-cluster for the new zoom level
                 }
                 .onMapCameraChange(frequency: .continuous) { _ in
                     if isAddingPlace {
@@ -197,35 +198,56 @@ struct MapView: View {
                     if isAddingPlace {
                         isMapMoving = false
                         newPlaceCoordinate = context.camera.centerCoordinate
+                        reverseGeocode(context.camera.centerCoordinate)
                     }
                 }
                 .ignoresSafeArea()
                 
                 if isAddingPlace {
-                    VStack {
-                        Spacer()
-                        
-                        Image(systemName: isMapMoving ? "mappin" : "mappin.and.ellipse")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.appRed)
-                            .shadow(radius: 4)
-                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isMapMoving)
-                        
-                        Spacer()
+                    // Center "placing" pin — the tip marks the exact target point.
+                    // It lifts while the map is moving and drops when you stop.
+                    ZStack {
+                        // Ground shadow at the precise point (screen center).
+                        Ellipse()
+                            .fill(Color.black.opacity(0.28))
+                            .frame(width: isMapMoving ? 18 : 10,
+                                   height: isMapMoving ? 6 : 4)
+                            .blur(radius: 1)
+
+                        // Branded pin graphic, tip resting on the ground dot.
+                        Image(.iconPointer)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 44, height: 56)
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 3)
+                            .offset(y: -28 + (isMapMoving ? -14 : 0))
                     }
+                    .animation(.spring(response: 0.32, dampingFraction: 0.62), value: isMapMoving)
                     .allowsHitTesting(false)
                 }
                 // TOP CONTROLS
                 if !isAddingPlace{
                     VStack(spacing: 12) {
-                        SearchBarView(text: $searchText)
+                        GlassSearchBar(text: $searchText)
+                            .onChange(of: searchText) { _, query in
+                                scheduleSearch(query)
+                            }
+
+                        if !searchResults.isEmpty {
+                            searchResultsList
+                        }
+
                         CategoryChipsView(
                             categories: allCategories,
                             selectedCategory: $selectedCategory
                         )
-                        
+
+                        if locationManager.isDenied {
+                            locationDeniedBanner
+                        }
+
                         Spacer()
-                        
+
                         HStack {
                             Spacer()
                             VStack(spacing: 12){
@@ -247,47 +269,42 @@ struct MapView: View {
                                         isAddingPlace = true
                                         if let camera = currentCamera {
                                             newPlaceCoordinate = camera.centerCoordinate
+                                            reverseGeocode(camera.centerCoordinate)
                                         }
                                     }
                                 } label: {
                                     Image(systemName: "plus")
                                         .fontWeight(.semibold)
-                                        .frame(width: 44, height: 44)
-                                        .background(Color.white)
-                                        .clipShape(Circle())
-                                        .shadow(radius: 4)
+                                        .foregroundStyle(.white)
+                                        .frame(width: 52, height: 52)
                                 }
-                                
+                                .glassEffect(.regular.tint(Color(.appRed)).interactive(), in: Circle())
+
                                 Button {
                                     guard let coordinate = locationManager.userLocation?.coordinate else { return }
-                                    guard let camera = currentCamera else { return }
                                     withAnimation(.easeInOut) {
                                         cameraPosition = .camera(
                                             MapCamera(
                                                 centerCoordinate: coordinate,
-                                                distance: 28_000,
+                                                distance: 2_000,
                                                 heading: 0,          // 🧭 north
-                                                pitch: camera.pitch
+                                                pitch: currentCamera?.pitch ?? 0
                                             )
                                         )
-                                        //                                    cameraPosition = .camera(
-                                        //                                        MapCamera(
-                                        //                                            centerCoordinate: coordinate,
-                                        //                                            distance: 28_000   // nicely zoomed out
-                                        //                                        )
-                                        //                                    )
                                     }
                                 } label: {
                                     Image(systemName: "location.fill")
-                                        .frame(width: 44, height: 44)
-                                        .background(Color.white)
-                                        .clipShape(Circle())
-                                        .shadow(radius: 4)
+                                        .foregroundStyle(Color(.appRed))
+                                        .frame(width: 52, height: 52)
                                 }
+                                .glassEffect(.regular.interactive(), in: Circle())
                             }
                         }
                         .padding(.horizontal, 20)
-                        .padding(.bottom, 20)
+
+                        EmojiPickerButton(selected: $selectedEmoji, options: emojiOptions)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 20)
                     }
                     .padding(.top, 10)
                 }
@@ -303,6 +320,11 @@ struct MapView: View {
                         .scaleEffect(1.2)
                 }
                 
+                // EMPTY STATE
+                if places.isEmpty && !showLoader && !isAddingPlace {
+                    emptyState
+                }
+
                 if showCard {
                     Color.black.opacity(0.001)
                         .ignoresSafeArea()
@@ -326,11 +348,33 @@ struct MapView: View {
                 if isAddingPlace {
                     VStack {
                         Spacer()
-                        
-                        VStack{
+
+                        VStack(spacing: 12) {
+                            // Address preview so the user knows what they're picking.
+                            HStack(spacing: 10) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .foregroundStyle(Color(.appRed))
+                                    .font(.title3)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(placingName.isEmpty ? "Dropped pin" : placingName)
+                                        .font(.subheadline).fontWeight(.semibold)
+                                        .foregroundStyle(Color(.textPrimary))
+                                        .lineLimit(1)
+                                    Text(placingAddress.isEmpty ? "Move the map to position the pin" : placingAddress)
+                                        .font(.caption)
+                                        .foregroundStyle(Color(.textSecondary))
+                                        .lineLimit(2)
+                                }
+                                Spacer()
+                            }
+                            .padding()
+                            .background(.regularMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .padding(.horizontal)
+
                             Button {
                                 print("Selected Coordinate:", newPlaceCoordinate as Any)
-                                
+
                                 // Later → show sheet for name entry
                                 withAnimation(.spring()) {
                                     isInAddFlow = true
@@ -391,10 +435,13 @@ struct MapView: View {
                     }
             }
             .navigationDestination(isPresented: $navigateToAddPlace) {
-                AddPlaceView(coordinate: newPlaceCoordinate ?? CLLocationCoordinate2D(
-                    latitude: 37.7749,
-                    longitude: -122.4194
-                )){
+                AddPlaceView(
+                    coordinate: newPlaceCoordinate ?? CLLocationCoordinate2D(
+                        latitude: 37.7749,
+                        longitude: -122.4194
+                    ),
+                    suggestedName: placingName
+                ){
                     Task {
                                 await refreshPlaces()
                             }
@@ -432,6 +479,9 @@ struct MapView: View {
         .task {
 //            vistitedPlacesID = await supabaseVM.fetchUniqueVisitedPlaces()
         }
+        .onChange(of: filteredPlaces) { _, _ in
+            recomputeClusters()
+        }
         .onChange(of: locationManager.userLocation) { _, location in
             guard let location, isFirtTime else { return }
             isFirtTime = false
@@ -446,6 +496,158 @@ struct MapView: View {
             }
         }
     }
+    // MARK: - Search results dropdown
+
+    private var searchResultsList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(searchResults.prefix(6).enumerated()), id: \.offset) { _, item in
+                Button {
+                    goToSearchResult(item)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "mappin.circle.fill")
+                            .foregroundStyle(Color(.appRed))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name ?? "Unknown")
+                                .font(.subheadline)
+                                .foregroundStyle(Color(.textPrimary))
+                                .lineLimit(1)
+                            if let locality = item.placemark.locality {
+                                Text(locality)
+                                    .font(.caption)
+                                    .foregroundStyle(Color(.textSecondary))
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 14)
+                    .contentShape(Rectangle())
+                }
+                Divider().padding(.leading, 46)
+            }
+        }
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+        .padding(.horizontal)
+    }
+
+    // MARK: - Location-denied banner
+
+    private var locationDeniedBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "location.slash.fill")
+                .foregroundStyle(Color(.appRed))
+            Text("Location is off — turn it on to center the map on you.")
+                .font(.caption)
+                .foregroundStyle(Color(.textPrimary))
+            Spacer()
+            Button("Settings") { openSettings() }
+                .font(.caption).fontWeight(.semibold)
+                .foregroundStyle(Color(.appRed))
+        }
+        .padding(12)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal)
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "mappin.and.ellipse")
+                .font(.system(size: 40))
+                .foregroundStyle(Color(.appRed))
+            Text("No places yet")
+                .font(.headline)
+                .foregroundStyle(Color(.textPrimary))
+            Text("Tap the + button to drop a pin and save your first place.")
+                .font(.subheadline)
+                .foregroundStyle(Color(.textSecondary))
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
+        .padding(.horizontal, 40)
+    }
+
+    // MARK: - Search + geocoding
+
+    /// Debounced address/landmark search that repositions the map.
+    private func scheduleSearch(_ query: String) {
+        searchTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else {
+            searchResults = []
+            return
+        }
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            if Task.isCancelled { return }
+            await runSearch(trimmed)
+        }
+    }
+
+    private func runSearch(_ query: String) async {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        if let camera = currentCamera {
+            request.region = MKCoordinateRegion(
+                center: camera.centerCoordinate,
+                latitudinalMeters: 60_000,
+                longitudinalMeters: 60_000
+            )
+        }
+        let response = try? await MKLocalSearch(request: request).start()
+        await MainActor.run {
+            searchResults = response?.mapItems ?? []
+        }
+    }
+
+    private func goToSearchResult(_ item: MKMapItem) {
+        let coordinate = item.placemark.coordinate
+
+        // Recenter so the spot is in view when we return from the add flow.
+        cameraPosition = .camera(
+            MapCamera(centerCoordinate: coordinate, distance: 4_000)
+        )
+
+        // Prefill and open Add Place for this searched place — one-tap save.
+        newPlaceCoordinate = coordinate
+        placingName = item.name ?? ""
+        searchResults = []
+        searchText = ""
+        hideKeyboard()
+        isInAddFlow = true
+        navigateToAddPlace = true
+    }
+
+    /// Reverse-geocode the pin being placed so the user sees the address.
+    private func reverseGeocode(_ coordinate: CLLocationCoordinate2D) {
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            guard let p = placemarks?.first else { return }
+            let name = p.name ?? p.thoroughfare ?? p.locality ?? "Dropped pin"
+            let address = [p.thoroughfare, p.locality, p.administrativeArea, p.country]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+            DispatchQueue.main.async {
+                placingName = name
+                placingAddress = address
+            }
+        }
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
     func refreshPlaces() async {
         let localPlaces = CoreDataLayer.shared.fetchPlaces()
         
@@ -461,6 +663,60 @@ struct MapView: View {
         showLoader = false
 
         vistitedPlacesID = await supabaseVM.fetchUniqueVisitedPlaces()
+        visitedThumbnails = await supabaseVM.fetchVisitedPlaceThumbnails()
+        recomputeClusters()
+    }
+
+    /// Best image for a pin: a visit memory photo if there is one, otherwise the
+    /// place's own uploaded photo. `nil` → the pin shows its category icon.
+    private func bestImage(for place: Place) -> String? {
+        visitedThumbnails[place.id] ?? place.image_urls?.first
+    }
+
+    // MARK: - Clustering
+
+    /// Groups nearby places into clusters sized to the current zoom level.
+    private func recomputeClusters() {
+        let items = filteredPlaces
+        let distance = currentCamera?.distance ?? 28_000
+        // Cell size (degrees) scales with zoom: bigger when zoomed out.
+        let cellDeg = max((distance / 111_000) * 0.12, 0.0002)
+
+        var buckets: [String: [Place]] = [:]
+        for place in items {
+            let latCell = Int((place.latitude / cellDeg).rounded(.down))
+            let lonCell = Int((place.longitude / cellDeg).rounded(.down))
+            buckets["\(latCell)_\(lonCell)", default: []].append(place)
+        }
+
+        clusters = buckets.map { key, group in
+            let lat = group.map(\.latitude).reduce(0, +) / Double(group.count)
+            let lon = group.map(\.longitude).reduce(0, +) / Double(group.count)
+            return PlaceCluster(
+                id: key,
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                places: group
+            )
+        }
+    }
+
+    private func zoomToCluster(_ cluster: PlaceCluster) {
+        let newDistance = max((currentCamera?.distance ?? 28_000) / 3, 1_000)
+        withAnimation(.easeInOut) {
+            cameraPosition = .camera(
+                MapCamera(centerCoordinate: cluster.coordinate, distance: newDistance)
+            )
+        }
+    }
+
+    private func clusterBubble(_ count: Int) -> some View {
+        Text("\(count)")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 42, height: 42)
+            .background(Circle().fill(Color(.appRed)))
+            .overlay(Circle().stroke(.white, lineWidth: 2))
+            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
     }
     private func dismissBottomCard() {
         withAnimation(.spring()) {
@@ -495,6 +751,14 @@ struct MapView: View {
 }
 
 
+
+/// A group of nearby places rendered as one annotation (a single pin when it
+/// contains one place, a count bubble when it contains several).
+struct PlaceCluster: Identifiable {
+    let id: String
+    let coordinate: CLLocationCoordinate2D
+    let places: [Place]
+}
 
 #Preview{
     MapView()

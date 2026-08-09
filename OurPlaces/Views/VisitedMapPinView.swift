@@ -9,72 +9,73 @@ import SwiftUI
 
 struct VisitedMapPinView: View {
     let place: Place
-    @State private var imageURL: String? = ""
+    /// Preloaded by MapView in one batched query — no per-pin network call.
+    var imageURL: String?
     let size: CGFloat = 50
-    let authVM  = SupabaseAuthVM()
-    
+
     var body: some View {
         VStack(spacing: 0) {
-            
-            // Circle with image
+
+            // Photo bubble with a white gap + brand ring.
             ZStack {
-                
-                // Triangle (BACK)
-                Triangle()
-                    .fill(Color.white)
-                    .frame(width: 14, height: 12)
-                    .shadow(radius: 2)
-                    .offset(y: size / 2) // push below circle
-                
-                // Circle (FRONT)
-                ZStack {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: size, height: size)
-                        .shadow(radius: 4)
-                    
-                    CachedAsyncImage(url: URL(string: imageURL ?? "")) { phase in
+                Circle()
+                    .fill(.white)
+                    .frame(width: size, height: size)
+
+                if let imageURL, !imageURL.isEmpty, let url = URL(string: imageURL) {
+                    CachedAsyncImage(url: url) { phase in
                         switch phase {
-                        case .empty:
-                            defaultImage
                         case .success(let image):
                             image
                                 .resizable()
                                 .scaledToFill()
-                        case .failure:
-                            defaultImage
-                        @unknown default:
-                            defaultImage
+                        default:
+                            placeholder
                         }
                     }
                     .frame(width: size - 6, height: size - 6)
                     .clipShape(Circle())
+                } else {
+                    placeholder
+                        .frame(width: size - 6, height: size - 6)
+                        .clipShape(Circle())
                 }
             }
-            
-            // Pointer
+            .overlay(
+                Circle().stroke(Color(.appRed), lineWidth: 3)
+            )
+
+            // Single pointer, same brand color, tucked under the ring.
             Triangle()
-                .fill(Color.white)
-                .frame(width: 12, height: 10)
-                .shadow(radius: 2)
-                .offset(y: -1)
+                .fill(Color(.appRed))
+                .frame(width: 15, height: 12)
+                .offset(y: -3)
         }
-        .task(id: place.id) {
-                do {
-                    let visitImg = try await authVM.fetchImagesForPlace(placeId: place.id).first
-                    imageURL = visitImg?.image_url
-                    } catch {
-                        print("Failed to fetch images:", error)
-                    }
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.28), radius: 4, y: 3)
+    }
+
+    // Shown when a place has no photo — the category icon on a soft brand tint.
+    var placeholder: some View {
+        ZStack {
+            Color(.appRed).opacity(0.15)
+            Image(systemName: categoryIcon)
+                .foregroundColor(Color(.appRed))
+                .font(.system(size: size * 0.34, weight: .semibold))
         }
     }
-    
-    var defaultImage: some View {
-        Image(systemName: "photo")
-            .resizable()
-            .scaledToFit()
-            .padding(10)
-            .foregroundColor(.gray)
+
+    private var categoryIcon: String {
+        switch place.category.lowercased() {
+        case "food":          return "fork.knife"
+        case "cafe":          return "cup.and.saucer.fill"
+        case "historic":      return "building.columns.fill"
+        case "nature":        return "leaf.fill"
+        case "shopping":      return "bag.fill"
+        case "religious":     return "sparkles"
+        case "entertainment": return "theatermasks.fill"
+        default:              return "mappin"
+        }
     }
 }
 

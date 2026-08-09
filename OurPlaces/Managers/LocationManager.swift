@@ -14,16 +14,30 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let manager = CLLocationManager()
 
     @Published var userLocation: CLLocation?
+    @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
+
+    /// True when the user has explicitly declined location access.
+    var isDenied: Bool {
+        authorizationStatus == .denied || authorizationStatus == .restricted
+    }
 
     override init() {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
+        authorizationStatus = manager.authorizationStatus
     }
 
     func requestLocation() {
         manager.requestWhenInUseAuthorization()
         manager.startUpdatingLocation()
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        authorizationStatus = manager.authorizationStatus
+        if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
+            manager.startUpdatingLocation()
+        }
     }
 
     func locationManager(

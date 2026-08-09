@@ -424,6 +424,30 @@ final class SupabaseAuthVM {
     }
 
     
+    /// One representative (most recent) image URL per visited place, fetched in
+    /// a single query — so map pins don't each make their own network call.
+    func fetchVisitedPlaceThumbnails() async -> [UUID: String] {
+        guard let userId = supabase.auth.currentUser?.id else { return [:] }
+        do {
+            let response = try await supabase
+                .from("visit_images")
+                .select("image_url, created_at_millis, visits!inner(place_id)")
+                .eq("user_id", value: userId)
+                .order("created_at_millis", ascending: false)
+                .execute()
+
+            let rows = try JSONDecoder().decode([VisitImageWithPlace].self, from: response.data)
+            var map: [UUID: String] = [:]
+            for row in rows where map[row.visits.place_id] == nil {
+                map[row.visits.place_id] = row.image_url   // first = most recent
+            }
+            return map
+        } catch {
+            print("Error fetching visited thumbnails:", error)
+            return [:]
+        }
+    }
+
     func fetchUniqueVisitedPlaces() async -> [UUID] {
         do {
             guard let userId = SupabaseManager.shared.client.auth.currentUser?.id else { return [] }
@@ -449,13 +473,17 @@ final class SupabaseAuthVM {
         latitude: Double,
         longitude: Double,
         category: String,
-        description: String
+        description: String,
+        images: [UIImage] = []
     ) async throws {
-        
+
         guard let user = try? await supabase.auth.session.user else {
             throw NSError(domain: "UserNotLoggedIn", code: 401)
         }
-        
+
+        // Upload any selected photos first, then save their URLs with the place.
+        let imageURLs = try await uploadPlaceImages(images, userId: user.id)
+
         let newPlace = PrivatePlaceInsert(
             name: name,
             latitude: latitude,
@@ -463,13 +491,44 @@ final class SupabaseAuthVM {
             category: category,
             user_id: user.id,
             description: description,
-            image_urls: [],
+            image_urls: imageURLs,
             is_private: true
         )
-        
+
         try await supabase
             .from("places")
             .insert(newPlace)
             .execute()
     }
+
+    /// Uploads place photos to storage and returns their public URLs.
+    private func uploadPlaceImages(_ images: [UIImage], userId: UUID) async throws -> [String] {
+        var urls: [String] = []
+        for image in images {
+            guard let data = image.jpegData(compressionQuality: 0.8) else { continue }
+            // User ID must be the FIRST folder to satisfy the Storage RLS policy
+            // (same convention as profile/visit uploads).
+            let path = "\(userId.uuidString)/places/\(UUID().uuidString).jpg"
+            try await supabase.storage
+                .from("visit-images")
+                .upload(
+                    path,
+                    data: data,
+                    options: FileOptions(contentType: "image/jpeg", upsert: true)
+                )
+            let publicURL = try supabase.storage
+                .from("visit-images")
+                .getPublicURL(path: path)
+            urls.append(publicURL.absoluteString)
+        }
+        return urls
+    }
+}
+
+/// Decodes a visit_images row joined with its visit's place_id (for batch thumbnails).
+private struct VisitImageWithPlace: Decodable {
+    let image_url: String
+    let created_at_millis: Int64
+    let visits: VisitRef
+    struct VisitRef: Decodable { let place_id: UUID }
 }
