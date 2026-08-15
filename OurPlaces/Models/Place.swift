@@ -54,6 +54,14 @@ struct VisitImage: Decodable, Hashable {
     let created_at_millis: Int64
     var caption: String? = nil
 }
+/// A place photo that also knows which visit it belongs to (and that visit's date).
+struct PlaceVisitImage: Decodable, Hashable {
+    let image_url: String
+    let created_at_millis: Int64
+    let caption: String?
+    let visit_id: UUID
+    let visited_at_millis: Int64
+}
 struct users: Codable{
     let id: UUID
     let full_name: String?

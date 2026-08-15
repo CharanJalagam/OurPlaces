@@ -366,6 +366,49 @@ final class SupabaseAuthVM {
         return try JSONDecoder().decode([VisitImage].self, from: response.data)
     }
 
+    /// All of a place's photos, each carrying its `visit_id` and the visit's date, so
+    /// the caller can show one visit (filter) or all visits grouped (group by visit).
+    func fetchPlaceImagesWithVisit(placeId: UUID) async throws -> [PlaceVisitImage] {
+
+        guard let userId = supabase.auth.currentUser?.id else {
+            throw NSError(domain: "Auth", code: 401)
+        }
+
+        struct Row: Decodable {
+            let image_url: String
+            let created_at_millis: Int64
+            let caption: String?
+            let visit_id: UUID
+            let visits: VisitJoin
+            struct VisitJoin: Decodable { let visited_at_millis: Int64 }
+        }
+
+        let response = try await supabase
+            .from("visit_images")
+            .select("""
+            image_url,
+            created_at_millis,
+            caption,
+            visit_id,
+            visits!inner(place_id, visited_at_millis)
+        """)
+            .eq("user_id", value: userId)
+            .eq("visits.place_id", value: placeId)
+            .order("created_at_millis", ascending: false)
+            .execute()
+
+        let rows = try JSONDecoder().decode([Row].self, from: response.data)
+        return rows.map {
+            PlaceVisitImage(
+                image_url: $0.image_url,
+                created_at_millis: $0.created_at_millis,
+                caption: $0.caption,
+                visit_id: $0.visit_id,
+                visited_at_millis: $0.visits.visited_at_millis
+            )
+        }
+    }
+
     /// Sets/updates the caption on a memory photo (matched by its image URL).
     func setCaption(imageURL: String, caption: String) async throws {
         guard let userId = supabase.auth.currentUser?.id else {

@@ -2,11 +2,9 @@
 //  MemoriesInternalVIew.swift
 //  OurPlaces
 //
-//  Created by apple on 14/02/26.
-//
-//  A single place's memories, shown two ways:
-//   • Polaroid — a rich, swipeable stack of photos (swiped cards cycle to the back)
-//   • Grid     — a scrapbook masonry; captioned photos become framed polaroids
+//  A place's memories for a specific visit:
+//   • Polaroid — a swipeable stack of *this visit's* photos
+//   • Grid     — *all* the place's photos, segregated by visit (newest first)
 //
 
 import SwiftUI
@@ -22,13 +20,24 @@ private let memTextPrimary    = Color("TextPrimary")
 private let memTextSecondary  = Color("TextSecondary")
 private let memPlaceholder    = Color("AppSecondaryColor")
 
+/// One visit's photos in the Grid, with a global offset into the flattened list.
+private struct MemGridSection: Identifiable {
+    let visitId: UUID
+    let date: Date
+    let images: [VisitImage]
+    let startOffset: Int
+    var id: UUID { visitId }
+}
+
 struct MemoriesInternalVIew: View {
 
     let visit: TimelineViewModel.VisitWithPlace
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var images: [VisitImage] = []
+    @State private var polaroidImages: [VisitImage] = []   // this visit only
+    @State private var gridSections: [MemGridSection] = []  // all visits, grouped
+    @State private var totalPhotos = 0
     @State private var showLoader = true
     @State private var visitCount = 0
     @State private var mode: DisplayMode = .polaroid
@@ -41,8 +50,7 @@ struct MemoriesInternalVIew: View {
     private let supabase = SupabaseAuthVM()
     private let vm = MemoriesViewModel()
 
-    /// When non-nil, the network fetch is skipped and these images are shown
-    /// (used by previews / the mock harness). Production call sites omit it.
+    /// When non-nil, the network fetch is skipped (used by previews).
     private let injectedImages: [VisitImage]?
 
     init(visit: TimelineViewModel.VisitWithPlace,
@@ -50,7 +58,16 @@ struct MemoriesInternalVIew: View {
          previewVisitCount: Int = 0) {
         self.visit = visit
         self.injectedImages = previewImages
-        _images = State(initialValue: previewImages ?? [])
+        _polaroidImages = State(initialValue: previewImages ?? [])
+        if let imgs = previewImages {
+            _gridSections = State(initialValue: [
+                MemGridSection(visitId: visit.id, date: visit.visitDate, images: imgs, startOffset: 0)
+            ])
+            _totalPhotos = State(initialValue: imgs.count)
+        } else {
+            _gridSections = State(initialValue: [])
+            _totalPhotos = State(initialValue: 0)
+        }
         _showLoader = State(initialValue: previewImages == nil)
         _visitCount = State(initialValue: previewVisitCount)
     }
@@ -59,6 +76,11 @@ struct MemoriesInternalVIew: View {
         case polaroid = "Polaroid"
         case grid = "Grid"
         var id: String { rawValue }
+    }
+
+    /// Photos backing the full-screen viewer for the current mode.
+    private var activeImages: [VisitImage] {
+        mode == .polaroid ? polaroidImages : gridSections.flatMap(\.images)
     }
 
     // MARK: Body
@@ -84,7 +106,7 @@ struct MemoriesInternalVIew: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .fullScreenCover(item: $selectedIndex) { index in
-            PhotosView(images: images, place: visit.place, startIndex: index)
+            PhotosView(images: activeImages, place: visit.place, startIndex: index)
         }
         .task {
             if injectedImages == nil {
@@ -157,27 +179,39 @@ struct MemoriesInternalVIew: View {
         }
     }
 
-    // MARK: - Stats (photos • visits)
+    // MARK: - Stats (adapts to the mode)
 
     private var statsRow: some View {
         HStack(spacing: 6) {
-            Text("\(images.count)")
-                .fontWeight(.bold)
-                .foregroundStyle(memHeading)
-            Text(images.count == 1 ? "photo" : "photos")
-                .foregroundStyle(memTextSecondary)
-
-            Text("·").foregroundStyle(memTextSecondary.opacity(0.6))
-
-            Text("\(visitCount)")
-                .fontWeight(.bold)
-                .foregroundStyle(memHeading)
-            Text(visitCount == 1 ? "visit" : "visits")
-                .foregroundStyle(memTextSecondary)
+            if mode == .polaroid {
+                boldNumber(polaroidImages.count)
+                Text(polaroidImages.count == 1 ? "photo" : "photos")
+                    .foregroundStyle(memTextSecondary)
+                dot
+                Text(dateText(visit.visitDate))
+                    .foregroundStyle(memTextSecondary)
+            } else {
+                boldNumber(visitCount)
+                Text(visitCount == 1 ? "visit" : "visits")
+                    .foregroundStyle(memTextSecondary)
+                dot
+                boldNumber(totalPhotos)
+                Text(totalPhotos == 1 ? "photo" : "photos")
+                    .foregroundStyle(memTextSecondary)
+            }
         }
         .font(.subheadline)
         .padding(.top, 2)
         .padding(.bottom, 12)
+        .animation(.easeInOut(duration: 0.2), value: mode)
+    }
+
+    private func boldNumber(_ value: Int) -> some View {
+        Text("\(value)").fontWeight(.bold).foregroundStyle(memHeading)
+    }
+
+    private var dot: some View {
+        Text("·").foregroundStyle(memTextSecondary.opacity(0.6))
     }
 
     // MARK: - Mode picker
@@ -222,28 +256,41 @@ struct MemoriesInternalVIew: View {
     private var mainContent: some View {
         if showLoader {
             VStack { Spacer(); ProgressView().tint(memAccent); Spacer() }
-        } else if images.isEmpty {
-            VStack(spacing: 10) {
-                Spacer()
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.largeTitle)
-                    .foregroundStyle(memTextSecondary.opacity(0.6))
-                Text("No memories yet")
-                    .foregroundStyle(memTextSecondary)
-                Spacer()
-            }
         } else {
             Group {
                 switch mode {
-                case .polaroid: polaroidSection
-                case .grid: gridSection
+                case .polaroid:
+                    if polaroidImages.isEmpty {
+                        emptyState("No photos from this visit")
+                    } else {
+                        polaroidSection
+                    }
+                case .grid:
+                    if gridSections.isEmpty {
+                        emptyState("No memories yet")
+                    } else {
+                        gridSection
+                    }
                 }
             }
             .transition(.opacity)
         }
     }
 
-    // MARK: - Polaroid section
+    private func emptyState(_ text: String) -> some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.largeTitle)
+                .foregroundStyle(memTextSecondary.opacity(0.6))
+            Text(text)
+                .foregroundStyle(memTextSecondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Polaroid section (this visit)
 
     private var polaroidSection: some View {
         GeometryReader { geo in
@@ -253,13 +300,13 @@ struct MemoriesInternalVIew: View {
                 Spacer(minLength: 0)
 
                 PolaroidStack(
-                    images: images,
+                    images: polaroidImages,
                     cardWidth: cardW,
                     currentIndex: $topIndex,
                     onTapTop: { selectedIndex = $0 }
                 )
 
-                if images.count > 1 {
+                if polaroidImages.count > 1 {
                     HStack(spacing: 6) {
                         Image(systemName: "hand.draw")
                         Text("Swipe")
@@ -280,7 +327,7 @@ struct MemoriesInternalVIew: View {
 
     private var polaroidFooter: some View {
         VStack(spacing: 8) {
-            Text(fullDate(images[safe: topIndex]?.created_at_millis))
+            Text(fullDate(polaroidImages[safe: topIndex]?.created_at_millis))
                 .font(.system(.title2, design: .serif).weight(.semibold))
                 .foregroundStyle(memHeading)
                 .contentTransition(.opacity)
@@ -296,32 +343,58 @@ struct MemoriesInternalVIew: View {
         .animation(.easeInOut(duration: 0.25), value: topIndex)
     }
 
-    // MARK: - Grid section (scrapbook masonry)
+    // MARK: - Grid section (all visits, segregated)
 
     private var gridSection: some View {
         GeometryReader { geo in
             let hPad: CGFloat = 14
             let gutter: CGFloat = 12
             let colW = (geo.size.width - hPad * 2 - gutter) / 2
-            let cols = columns(width: colW)
 
             ScrollView(showsIndicators: false) {
-                HStack(alignment: .top, spacing: gutter) {
-                    masonryColumn(cols.left, width: colW)
-                    masonryColumn(cols.right, width: colW)
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    ForEach(gridSections) { section in
+                        VStack(alignment: .leading, spacing: 12) {
+                            sectionHeader(section)
+                                .padding(.horizontal, hPad)
+
+                            sectionMasonry(section, columnWidth: colW, gutter: gutter)
+                                .padding(.horizontal, hPad)
+                        }
+                    }
                 }
-                .padding(.horizontal, hPad)
-                .padding(.top, 12)
-                .padding(.bottom, 32)
+                .padding(.top, 14)
+                .padding(.bottom, 36)
             }
         }
     }
 
-    private func masonryColumn(_ indices: [Int], width: CGFloat) -> some View {
+    private func sectionHeader(_ section: MemGridSection) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(dateText(section.date))
+                .font(.system(.headline, design: .serif))
+                .foregroundStyle(memHeading)
+            Spacer()
+            Text("\(section.images.count) \(section.images.count == 1 ? "photo" : "photos")")
+                .font(.caption)
+                .foregroundStyle(memTextSecondary)
+        }
+    }
+
+    private func sectionMasonry(_ section: MemGridSection,
+                                columnWidth: CGFloat, gutter: CGFloat) -> some View {
+        let cols = balanced(section.images, width: columnWidth)
+        return HStack(alignment: .top, spacing: gutter) {
+            column(section, cols.left, width: columnWidth)
+            column(section, cols.right, width: columnWidth)
+        }
+    }
+
+    private func column(_ section: MemGridSection, _ local: [Int], width: CGFloat) -> some View {
         LazyVStack(spacing: 16) {
-            ForEach(indices, id: \.self) { i in
-                gridTile(images[i], index: i, width: width)
-                    .onTapGesture { selectedIndex = i }
+            ForEach(local, id: \.self) { i in
+                gridTile(section.images[i], index: i, width: width)
+                    .onTapGesture { selectedIndex = section.startOffset + i }
             }
         }
     }
@@ -373,22 +446,22 @@ struct MemoriesInternalVIew: View {
         .clipped()
     }
 
-    // MARK: - Masonry balancing
+    // MARK: - Masonry balancing (per section)
 
-    private func columns(width: CGFloat) -> (left: [Int], right: [Int]) {
+    private func balanced(_ imgs: [VisitImage], width: CGFloat) -> (left: [Int], right: [Int]) {
         var left: [Int] = [], right: [Int] = []
         var lh: CGFloat = 0, rh: CGFloat = 0
-        for i in images.indices {
-            let h = estimatedHeight(i, width: width)
+        for i in imgs.indices {
+            let h = tileHeight(imgs[i], width: width)
             if lh <= rh { left.append(i); lh += h } else { right.append(i); rh += h }
         }
         return (left, right)
     }
 
-    private func estimatedHeight(_ i: Int, width: CGFloat) -> CGFloat {
+    private func tileHeight(_ image: VisitImage, width: CGFloat) -> CGFloat {
         let side = width - 20
         let base = side + 16 + 14            // image + top padding + spacing + date line
-        if let caption = images[i].caption, !caption.isEmpty {
+        if let caption = image.caption, !caption.isEmpty {
             return base + 34 + 6             // + caption strip + bottom padding
         }
         return base + 2                      // slimmer strip when note-less
@@ -399,9 +472,36 @@ struct MemoriesInternalVIew: View {
     private func loadImages() async {
         showLoader = true
         do {
-            images = try await supabase.fetchImagesForPlace(placeId: visit.place.id)
+            let all = try await supabase.fetchPlaceImagesWithVisit(placeId: visit.place.id)
+            totalPhotos = all.count
+
+            // Polaroid: only this visit's photos.
+            polaroidImages = all
+                .filter { $0.visit_id == visit.id }
+                .map { VisitImage(image_url: $0.image_url, created_at_millis: $0.created_at_millis, caption: $0.caption) }
+
+            // Grid: group by visit, newest visit first.
+            let grouped = Dictionary(grouping: all, by: { $0.visit_id })
+            let sections = grouped.compactMap { (vid, rows) -> MemGridSection? in
+                guard let first = rows.first else { return nil }
+                let date = Date(timeIntervalSince1970: TimeInterval(first.visited_at_millis) / 1000)
+                let images = rows
+                    .sorted { $0.created_at_millis > $1.created_at_millis }
+                    .map { VisitImage(image_url: $0.image_url, created_at_millis: $0.created_at_millis, caption: $0.caption) }
+                return MemGridSection(visitId: vid, date: date, images: images, startOffset: 0)
+            }
+            .sorted { $0.date > $1.date }
+
+            var offset = 0
+            gridSections = sections.map { s in
+                let out = MemGridSection(visitId: s.visitId, date: s.date, images: s.images, startOffset: offset)
+                offset += s.images.count
+                return out
+            }
         } catch {
-            images = []
+            polaroidImages = []
+            gridSections = []
+            totalPhotos = 0
         }
         topIndex = 0
         showLoader = false
@@ -431,7 +531,10 @@ struct MemoriesInternalVIew: View {
 
     private func fullDate(_ millis: Int64?) -> String {
         guard let millis else { return "" }
-        let date = Date(timeIntervalSince1970: TimeInterval(millis) / 1000)
+        return dateText(Date(timeIntervalSince1970: TimeInterval(millis) / 1000))
+    }
+
+    private func dateText(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM dd, yyyy"
         return formatter.string(from: date)
